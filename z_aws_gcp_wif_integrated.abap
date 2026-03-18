@@ -1,7 +1,7 @@
 REPORT z_aws_gcp_wif_integrated.
 
 *----------------------------------------------------------------------*
-* DATA STRUCTURES
+* DATA STRUCTURES 752
 *----------------------------------------------------------------------*
 TYPES: BEGIN OF ty_aws_creds,
          accesskeyid     TYPE string,
