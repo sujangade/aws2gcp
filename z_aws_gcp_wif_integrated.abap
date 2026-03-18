@@ -114,8 +114,11 @@ CLASS lcl_wif_manager IMPLEMENTATION.
     lo_http->send( ). lo_http->receive( ).
     lv_imds_token = lo_http->response->get_cdata( ). lo_http->close( ).
 
+    " FIX: Removed inline return value and split the logic
     IF lv_imds_token IS INITIAL.
-       WRITE: / 'ERROR: IMDSv2 Token missing.'. RETURN abap_false.
+       WRITE: / 'ERROR: IMDSv2 Token missing.'. 
+       rv_success = abap_false.
+       RETURN.
     ENDIF.
 
     cl_http_client=>create_by_url( EXPORTING url = 'http://169.254.169.254/latest/meta-data/iam/security-credentials/' IMPORTING client = lo_http ).
@@ -132,21 +135,29 @@ CLASS lcl_wif_manager IMPLEMENTATION.
   ENDMETHOD.
 
   METHOD generate_aws_sts_token.
-    DATA: lv_ts TYPE timestamp, lv_tstr TYPE string.
+    DATA: lv_ts   TYPE timestamp,
+          lv_date TYPE d,
+          lv_time TYPE t,
+          lv_tstr TYPE string.
+
+    " FIX: Manual Timestamp formatting (avoids string offsets entirely)
     GET TIME STAMP FIELD lv_ts.
-    lv_tstr = |{ lv_ts TIMESTAMP = ISO TIMEZONE = 'UTC' }|.
-    REPLACE ALL OCCURRENCES OF: '-' IN lv_tstr WITH '', ':' IN lv_tstr WITH ''.
-    lv_tstr = lv_tstr(15) && 'Z'.
+    CONVERT TIME STAMP lv_ts TIME ZONE 'UTC' INTO DATE lv_date TIME lv_time.
     
-    DATA(lv_scope) = |{ lv_tstr(8) }/us-east-1/sts/aws4_request|.
+    " AWS requires ISO8601 basic format: YYYYMMDDTHHMMSSZ
+    lv_tstr = |{ lv_date }T{ lv_time }Z|.
+    
+    DATA(lv_scope) = |{ lv_date }/us-east-1/sts/aws4_request|.
     DATA(lv_can_headers) = |host:sts.amazonaws.com\nx-amz-date:{ lv_tstr }\n| &&
                            |x-amz-security-token:{ gs_aws_creds-token }\nx-goog-cloud-target-resource:{ iv_resource }\n|.
     DATA(lv_signed_hdrs) = 'host;x-amz-date;x-amz-security-token;x-goog-cloud-target-resource'.
-    DATA(lv_can_req) = |POST\n/\nAction=GetCallerIdentity&Version=2011-06-15\n{ lv_can_headers }\n{ lv_signed_hdrs }\n{ hash_sha256( '' ) }|.
+    
+    " Use backticks ` ` for an empty string literal to satisfy strict typing
+    DATA(lv_can_req) = |POST\n/\nAction=GetCallerIdentity&Version=2011-06-15\n{ lv_can_headers }\n{ lv_signed_hdrs }\n{ hash_sha256( ` ` ) }|.
     DATA(lv_sts) = |AWS4-HMAC-SHA256\n{ lv_tstr }\n{ lv_scope }\n{ hash_sha256( lv_can_req ) }|.
 
     DATA(lv_ks) = string_to_xstring( 'AWS4' && gs_aws_creds-secretaccesskey ).
-    DATA(lv_kd) = hmac_sha256( iv_key = lv_ks iv_data = lv_tstr(8) ).
+    DATA(lv_kd) = hmac_sha256( iv_key = lv_ks iv_data = |{ lv_date }| ).
     DATA(lv_kr) = hmac_sha256( iv_key = lv_kd iv_data = 'us-east-1' ).
     DATA(lv_ki) = hmac_sha256( iv_key = lv_kr iv_data = 'sts' ).
     DATA(lv_kn) = hmac_sha256( iv_key = lv_ki iv_data = 'aws4_request' ).
