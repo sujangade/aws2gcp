@@ -1,6 +1,3 @@
-Program
-
-
 REPORT z_aws_gcp_wif_integrated.
 
 *----------------------------------------------------------------------*
@@ -69,22 +66,43 @@ CLASS lcl_wif_manager IMPLEMENTATION.
 
   METHOD run_wif_flow.
     WRITE: / '--- Starting WIF Token Exchange ---'.
-    IF fetch_dynamic_aws_creds( ) = abap_false. RETURN. ENDIF.
-
-    DATA(lv_audience) = |//iam.googleapis.com/projects/{ p_prjnum }/locations/global/workloadIdentityPools/{ p_poolid }/providers/{ p_provid }|.
-    DATA(lv_subj) = generate_aws_sts_token( lv_audience ).
-    DATA(lv_fed)  = get_federated_token( iv_subject_token = lv_subj iv_audience = lv_audience ).
     
-    IF lv_fed IS INITIAL.
-      WRITE: / 'FAILED: Could not get Federated Token.'. RETURN.
+    IF fetch_dynamic_aws_creds( ) = abap_false. 
+      RETURN. 
     ENDIF.
 
+    WRITE: / 'SUCCESS: Fetched AWS Credentials.'.
+    WRITE: / 'AWS Access Key ID:', gs_aws_creds-accesskeyid.
+    WRITE: / '-----------------------------------------'.
+
+    DATA(lv_audience) = |//iam.googleapis.com/projects/{ p_prjnum }/locations/global/workloadIdentityPools/{ p_poolid }/providers/{ p_provid }|.
+    
+    " STEP 1: Generate Subject Token
+    DATA(lv_subj) = generate_aws_sts_token( lv_audience ).
+    WRITE: / 'STEP 1: AWS STS Subject Token Generated:'.
+    WRITE: / lv_subj.
+    WRITE: / '-----------------------------------------'.
+
+    " STEP 2: Get Federated Token
+    DATA(lv_fed)  = get_federated_token( iv_subject_token = lv_subj iv_audience = lv_audience ).
+    IF lv_fed IS INITIAL.
+      WRITE: / 'FAILED: Could not get Federated Token.'. 
+      RETURN.
+    ENDIF.
+    WRITE: / 'STEP 2: GCP Federated Token Retrieved:'.
+    WRITE: / lv_fed.
+    WRITE: / '-----------------------------------------'.
+
+    " STEP 3: Get Service Account Access Token
     DATA(lv_bq) = get_gcp_access_token( lv_fed ).
     IF lv_bq IS NOT INITIAL.
-      WRITE: / 'SUCCESS: BigQuery Access Token Generated:', / lv_bq.
+      WRITE: / 'STEP 3: SUCCESS - BigQuery Access Token Generated:'.
+      WRITE: / lv_bq.
     ELSE.
       WRITE: / 'FAILED: Could not impersonate Service Account.'.
     ENDIF.
+    WRITE: / '-----------------------------------------'.
+    
   ENDMETHOD.
 
   METHOD fetch_dynamic_aws_creds.
@@ -170,12 +188,33 @@ CLASS lcl_wif_manager IMPLEMENTATION.
 
   METHOD hash_sha256.
     DATA: lv_bin TYPE xstring.
-    cl_abap_message_digest=>calculate_hash_for_char( EXPORTING if_algorithm = 'SHA256' if_data = iv_data IMPORTING eb_hash = lv_bin ).
-    rv_hash = to_lower( |{ lv_bin }| ).
+    TRY.
+        cl_abap_message_digest=>calculate_hash_for_char( 
+          EXPORTING 
+            if_algorithm   = 'SHA256' 
+            if_data        = iv_data 
+          IMPORTING 
+            ef_hashxstring = lv_bin 
+        ).
+        rv_hash = to_lower( |{ lv_bin }| ).
+      CATCH cx_abap_message_digest.
+        CLEAR rv_hash. 
+    ENDTRY.
   ENDMETHOD.
 
   METHOD hmac_sha256.
-    cl_abap_hmac=>calculate_hmac_for_char( EXPORTING if_algorithm = 'SHA256' if_key = iv_key if_data = iv_data IMPORTING eb_hmac = rv_hmac ).
+    TRY.
+        cl_abap_hmac=>calculate_hmac_for_char( 
+          EXPORTING 
+            if_algorithm   = 'SHA256' 
+            if_key         = iv_key 
+            if_data        = iv_data 
+          IMPORTING 
+            ef_hmacxstring = rv_hmac 
+        ).
+      CATCH cx_abap_message_digest.
+        CLEAR rv_hmac.
+    ENDTRY.
   ENDMETHOD.
 
   METHOD string_to_xstring.
@@ -207,7 +246,3 @@ START-OF-SELECTION.
   ELSE.
     lo_app->run_wif_flow( ).
   ENDIF.
-
-
-
-
