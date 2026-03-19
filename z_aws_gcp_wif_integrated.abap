@@ -148,10 +148,9 @@ CLASS lcl_wif_manager IMPLEMENTATION.
     lv_tstr = |{ lv_date }T{ lv_time }Z|.
    
 
-    *DATA(lv_scope) = |{ lv_date }/us-east-1/sts/aws4_request|.
+    "data(lv_scope) = |{ lv_date }/us-east-1/sts/aws4_request|.
      DATA(lv_scope) = |{ lv_date }/us-gov-west-1/sts/aws4_request|.
-    *DATA(lv_can_headers) = |host:sts.amazonaws.com\nx-amz-date:{ lv_tstr }\n| &&
-                           |x-amz-security-token:{ gs_aws_creds-token }\nx-goog-cloud-target-resource:{ iv_resource }\n|.
+    "data(lv_can_headers) = |host:sts.amazonaws.com\nx-amz-date:{ lv_tstr }\n| &&
     DATA(lv_can_headers) = |host:sts.us-gov-west-1.amazonaws.com\nx-amz-date:{ lv_tstr }\n| &&
                            |x-amz-security-token:{ gs_aws_creds-token }\nx-goog-cloud-target-resource:{ iv_resource }\n|.
 
@@ -163,7 +162,7 @@ CLASS lcl_wif_manager IMPLEMENTATION.
 
     DATA(lv_ks) = string_to_xstring( 'AWS4' && gs_aws_creds-secretaccesskey ).
     DATA(lv_kd) = hmac_sha256( iv_key = lv_ks iv_data = |{ lv_date }| ).
-    *DATA(lv_kr) = hmac_sha256( iv_key = lv_kd iv_data = 'us-east-1' ).
+    "data(lv_kr) = hmac_sha256( iv_key = lv_kd iv_data = 'us-east-1' ).
       DATA(lv_kr) = hmac_sha256( iv_key = lv_kd iv_data = 'us-gov-west-1' ).
 
     DATA(lv_ki) = hmac_sha256( iv_key = lv_kr iv_data = 'sts' ).
@@ -172,7 +171,7 @@ CLASS lcl_wif_manager IMPLEMENTATION.
     DATA(lv_sig) = to_lower( |{ hmac_sha256( iv_key = lv_kn iv_data = lv_sts ) }| ).
     DATA(lv_auth) = |AWS4-HMAC-SHA256 Credential={ gs_aws_creds-accesskeyid }/{ lv_scope }, SignedHeaders={ lv_signed_hdrs }, Signature={ lv_sig }|.
 
-    *DATA(lv_json) = |\{"url":"https://sts.amazonaws.com/?Action=GetCallerIdentity&Version=2011-06-15","method":"POST","headers":[| &&
+    "data(lv_json) = |\{"url":"https://sts.amazonaws.com/?Action=GetCallerIdentity&Version=2011-06-15","method":"POST","headers":[| &&
     DATA(lv_json) = |\{"url":"https://sts.us-gov-west-1.amazonaws.com/?Action=GetCallerIdentity&Version=2011-06-15","method":"POST","headers":[| &&
                     |\{"key":"x-amz-date","value":"{ lv_tstr }"\},| &&
                     |\{"key":"x-amz-security-token","value":"{ gs_aws_creds-token }"\},| &&
