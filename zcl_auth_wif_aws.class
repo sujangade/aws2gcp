@@ -17,11 +17,17 @@ METHOD get_ext_idp_token.
           lv_xdata         TYPE xstring,
           lv_bin           TYPE xstring,
           lv_fed_token     TYPE string,
-          lv_sa_email      TYPE string.
+          " Configuration variables
+          lv_prjnum        TYPE string VALUE '1011910008274',
+          lv_poolid        TYPE string VALUE 'dla-aws-erp',
+          lv_provid        TYPE string VALUE 'dla-aws-erp-provider',
+          lv_sa_email      TYPE string VALUE 'svc-cloud-dla-sc-sbx-slt@dgee-dev-j65-data-fabric-0.iam.gserviceaccount.com',
+          lv_loc_audience  TYPE string,
+          lo_conv          TYPE REF TO cl_abap_conv_out_ce.
 
-    " --- CONFIGURATION ---
-    " Replace with your specific GCP Service Account
-    lv_sa_email = 'svc-cloud-dla-sc-sbx-slt@dgee-dev-j65-data-fabric-0.iam.gserviceaccount.com'.
+    " Initialize Converter
+    lo_conv = cl_abap_conv_out_ce=>create( encoding = 'UTF-8' ).
+    lv_loc_audience = |//iam.googleapis.com/projects/{ lv_prjnum }/locations/global/workloadIdentityPools/{ lv_poolid }/providers/{ lv_provid }|.
 
     " --- 1. FETCH DYNAMIC AWS CREDENTIALS (IMDSv2) ---
     cl_http_client=>create_by_url( EXPORTING url = 'http://169.254.169.254/latest/api/token' 
@@ -36,7 +42,6 @@ METHOD get_ext_idp_token.
       RETURN. 
     ENDIF.
 
-    " Get the Role Name
     cl_http_client=>create_by_url( EXPORTING url = 'http://169.254.169.254/latest/meta-data/iam/security-credentials/' 
                                    IMPORTING client = lo_http ).
     lo_http->request->set_header_field( name = 'x-aws-ec2-metadata-token' value = lv_imds_token ).
@@ -44,7 +49,6 @@ METHOD get_ext_idp_token.
     lv_role = lo_http->response->get_cdata( ). 
     lo_http->close( ).
 
-    " Get the Credentials for that Role
     cl_http_client=>create_by_url( EXPORTING url = |http://169.254.169.254/latest/meta-data/iam/security-credentials/{ lv_role }| 
                                    IMPORTING client = lo_http ).
     lo_http->request->set_header_field( name = 'x-aws-ec2-metadata-token' value = lv_imds_token ).
@@ -65,37 +69,39 @@ METHOD get_ext_idp_token.
     DATA(lv_empty_hash) = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855'.
     DATA(lv_scope) = |{ lv_date DATE = RAW }/us-gov-west-1/sts/aws4_request|.
     
-    " iv_audience is provided by the parent class /GOOG/CL_AUTH_WIF_BASE
     DATA(lv_can_headers) = |host:sts.us-gov-west-1.amazonaws.com{ lv_lf }| &&
                            |x-amz-date:{ lv_tstr }{ lv_lf }| &&
                            |x-amz-security-token:{ ls_aws_creds-token }{ lv_lf }| &&
-                           |x-goog-cloud-target-resource:{ iv_audience }{ lv_lf }|.
+                           |x-goog-cloud-target-resource:{ lv_loc_audience }{ lv_lf }|.
     
     DATA(lv_signed_hdrs) = 'host;x-amz-date;x-amz-security-token;x-goog-cloud-target-resource'.
     DATA(lv_can_req) = |POST{ lv_lf }/{ lv_lf }Action=GetCallerIdentity&Version=2011-06-15{ lv_lf }{ lv_can_headers }{ lv_lf }{ lv_signed_hdrs }{ lv_lf }{ lv_empty_hash }|.
 
     " Hash Canonical Request
-    lv_xdata = cl_abap_conv_out_ce=>create( encoding = 'UTF-8' )->convert( data = lv_can_req ).
+    lo_conv->convert( EXPORTING data = lv_can_req IMPORTING buffer = lv_xdata ).
     cl_abap_message_digest=>calculate_hash_for_raw( EXPORTING if_algorithm = 'SHA256' 
                                                     if_data = lv_xdata 
                                                     IMPORTING ef_hashxstring = lv_bin ).
     DATA(lv_sts_str) = |AWS4-HMAC-SHA256{ lv_lf }{ lv_tstr }{ lv_lf }{ lv_scope }{ lv_lf }{ to_lower( |{ lv_bin }| ) }|.
 
     " AWS Signing Process
-    DATA(lv_key) = cl_abap_conv_out_ce=>create( encoding = 'UTF-8' )->convert( data = 'AWS4' && ls_aws_creds-secretaccesskey ).
+    DATA(lv_key_str) = |AWS4{ ls_aws_creds-secretaccesskey }|.
+    lo_conv->convert( EXPORTING data = lv_key_str IMPORTING buffer = DATA(lv_key) ).
     
     DATA(lv_sign_parts) = VALUE string_table( ( |{ lv_date DATE = RAW }| ) ( `us-gov-west-1` ) ( `sts` ) ( `aws4_request` ) ).
     LOOP AT lv_sign_parts INTO DATA(lv_part).
+      lo_conv->convert( EXPORTING data = lv_part IMPORTING buffer = lv_xdata ).
       cl_abap_hmac=>calculate_hmac_for_raw( EXPORTING if_algorithm = 'SHA256' 
                                             if_key = lv_key 
-                                            if_data = cl_abap_conv_out_ce=>create( encoding = 'UTF-8' )->convert( data = lv_part ) 
+                                            if_data = lv_xdata 
                                             IMPORTING ef_hmacxstring = lv_bin ).
       lv_key = lv_bin.
     ENDLOOP.
 
+    lo_conv->convert( EXPORTING data = lv_sts_str IMPORTING buffer = lv_xdata ).
     cl_abap_hmac=>calculate_hmac_for_raw( EXPORTING if_algorithm = 'SHA256' 
                                           if_key = lv_key 
-                                          if_data = cl_abap_conv_out_ce=>create( encoding = 'UTF-8' )->convert( data = lv_sts_str ) 
+                                          if_data = lv_xdata 
                                           IMPORTING ef_hmacxstring = lv_bin ).
     DATA(lv_sig) = to_lower( |{ lv_bin }| ).
 
@@ -106,7 +112,7 @@ METHOD get_ext_idp_token.
                          |\{"key":"host","value":"sts.us-gov-west-1.amazonaws.com"\},| &&
                          |\{"key":"x-amz-date","value":"{ lv_tstr }"\},| &&
                          |\{"key":"x-amz-security-token","value":"{ ls_aws_creds-token }"\},| &&
-                         |\{"key":"x-goog-cloud-target-resource","value":"{ iv_audience }"\},| &&
+                         |\{"key":"x-goog-cloud-target-resource","value":"{ lv_loc_audience }"\},| &&
                          |\{"key":"Authorization","value":"{ lv_auth }"\}]\}|.
     
     DATA(lv_subject_token) = cl_http_utility=>escape_url( lv_subj_json ).
@@ -116,7 +122,7 @@ METHOD get_ext_idp_token.
                                    IMPORTING client = lo_http ).
     lo_http->request->set_method( 'POST' ).
     lo_http->request->set_header_field( name = 'Content-Type' value = 'application/json' ).
-    lo_http->request->set_cdata( |\{"audience":"{ iv_audience }","grantType":"urn:ietf:params:oauth:grant-type:token-exchange",| &&
+    lo_http->request->set_cdata( |\{"audience":"{ lv_loc_audience }","grantType":"urn:ietf:params:oauth:grant-type:token-exchange",| &&
                                  |"requestedTokenType":"urn:ietf:params:oauth:token-type:access_token","scope":"https://www.googleapis.com/auth/cloud-platform",| &&
                                  |"subjectTokenType":"urn:ietf:params:aws:token-type:aws4_request","subjectToken":"{ lv_subject_token }"\}| ).
     lo_http->send( ). lo_http->receive( ).
@@ -133,7 +139,6 @@ METHOD get_ext_idp_token.
       lo_http->request->set_cdata( '{"scope":["https://www.googleapis.com/auth/bigquery"]}' ).
       lo_http->send( ). lo_http->receive( ).
       
-      " Final token for the framework
       FIND REGEX '"accessToken":\s*"([^"]+)"' IN lo_http->response->get_cdata( ) SUBMATCHES rv_token.
       lo_http->close( ).
     ENDIF.
