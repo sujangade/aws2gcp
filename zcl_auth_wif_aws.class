@@ -115,8 +115,11 @@ METHOD get_ext_idp_token.
                          |\{"key":"x-goog-cloud-target-resource","value":"{ lv_loc_audience }"\},| &&
                          |\{"key":"Authorization","value":"{ lv_auth }"\}]\}|.
     
-    DATA(lv_subject_token) = cl_http_utility=>escape_url( lv_subj_json ).
+    cv_token = cl_http_utility=>escape_url( lv_subj_json ).
+    cv_token_type = 'urn:ietf:params:aws:token-type:aws4_request'.
 
+
+/*
     " --- 3. GET GCP FEDERATED TOKEN ---
     cl_http_client=>create_by_url( EXPORTING url = 'https://sts.googleapis.com/v1/token' 
                                    IMPORTING client = lo_http ).
@@ -141,6 +144,6 @@ METHOD get_ext_idp_token.
       
       FIND REGEX '"accessToken":\s*"([^"]+)"' IN lo_http->response->get_cdata( ) SUBMATCHES rv_token.
       lo_http->close( ).
-    ENDIF.
+    ENDIF. */
 
   ENDMETHOD.
