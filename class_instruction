@@ -1,0 +1,56 @@
+CLASS DEFINITION
+
+
+
+
+The Key Difference: The SDK Does the Rest!
+In your standalone report, you wrote get_federated_token (Step 2) and get_gcp_access_token (Step 3).
+You do not need to copy these into the new class. Because your class inherits from /GOOG/CL_AUTH_WIF_BASE, Google’s base class handles Steps 2 and 3 automatically. All the base class wants from you is Step 1: "Just give me the AWS token, and I'll do the rest."
+How to Transplant the Code to ZCL_AWS_GCP_WIF
+1. Add the Global Attributes (In SE24 Attributes / Types Tabs)
+Types Tab: Copy your ty_aws_creds definition here.
+
+
+Attributes Tab: Create a Private attribute named gs_aws_creds typed as ty_aws_creds.
+
+
+2. Copy the Helper Methods (In SE24 Methods Tab)
+Create these exact methods in your class, set their Visibility to Private, and paste their code from your report directly into them:
+fetch_dynamic_aws_creds
+
+
+generate_aws_sts_token
+
+
+hash_sha256
+
+
+hmac_sha256
+
+
+string_to_xstring
+
+
+3. Implement the Redefined Method
+Open the GET_EXT_IDP_TOKEN method that you redefined earlier. This is the "trigger" method the Google SDK calls. Paste this logic inside:
+ABAP
+ METHOD get_ext_idp_token.
+   " 1. Fetch the temporary EC2/GovCloud credentials via IMDSv2
+   IF me->fetch_dynamic_aws_creds( ) = abap_false.
+     " Optional: Raise an exception or log an error if EC2 metadata fails
+     RETURN.
+   ENDIF.
+
+   " 2. Define the Target Audience (GCP WIF Provider)
+   " Note: You can hardcode this here, or store it in a custom config table
+   DATA(lv_audience) = |//iam.googleapis.com/projects/1011910008274/locations/global/workloadIdentityPools/dla-aws-erp/providers/dla-aws-erp-provider|.
+
+   " 3. Generate and return the signed AWS Subject Token
+   " The Google SDK base class will automatically take this return value,
+   " send it to GCP STS, and fetch the final BigQuery token!
+   rv_ext_idp_token = me->generate_aws_sts_token( lv_audience ).
+
+ ENDMETHOD.
+You Are Done!
+Once you activate that class, your ABAP system is officially wired into the Google Cloud SDK using AWS Workload Identity Federation.
+Any time a developer uses the Google SDK to call BigQuery, Cloud Storage, or Vertex AI, the SDK will quietly run your class in the background, fetch the AWS EC2 metadata, calculate the SigV4 hash, pass it to GCP, and execute the API call—all seamlessly, securely, and completely passwordless.
