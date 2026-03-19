@@ -108,9 +108,9 @@ CLASS zcl_auth_wif_aws IMPLEMENTATION.
     lv_tstr = |{ lv_date }T{ lv_time }Z|. 
 
     DATA(lv_resource)    = iv_audience. 
-    DATA(lv_scope)       = |{ lv_date }/us-east-1/sts/aws4_request|.
+    DATA(lv_scope)       = |{ lv_date }/us-gov-west-1/sts/aws4_request|.
     DATA(lv_signed_hdrs) = `host;x-amz-date;x-amz-security-token;x-goog-cloud-target-resource`.
-    DATA(lv_can_headers) = |host:sts.amazonaws.com\nx-amz-date:{ lv_tstr }\n| &&
+    DATA(lv_can_headers) = |host:sts.us-gov-west-1.amazonaws.com\nx-amz-date:{ lv_tstr }\n| &&
                            |x-amz-security-token:{ ls_creds-token }\nx-goog-cloud-target-resource:{ lv_resource }\n|.
 
     " =========================================================================
@@ -150,8 +150,8 @@ CLASS zcl_auth_wif_aws IMPLEMENTATION.
     TRY. cl_abap_hmac=>calculate_hmac_for_char( EXPORTING if_algorithm = 'SHA256' if_key = lv_key_xstr if_data = lv_data_str IMPORTING ef_hmacxstring = lv_kd ). CATCH cx_abap_message_digest. ENDTRY.
     
     " HMAC 2: Region (Using backticks to enforce STRING type)
-    TRY. cl_abap_hmac=>calculate_hmac_for_char( EXPORTING if_algorithm = 'SHA256' if_key = lv_kd if_data = `us-east-1` IMPORTING ef_hmacxstring = lv_kr ). CATCH cx_abap_message_digest. ENDTRY.
-    
+    "TRY. cl_abap_hmac=>calculate_hmac_for_char( EXPORTING if_algorithm = 'SHA256' if_key = lv_kd if_data = `us-east-1` IMPORTING ef_hmacxstring = lv_kr ). CATCH cx_abap_message_digest. ENDTRY.
+    TRY. cl_abap_hmac=>calculate_hmac_for_char( EXPORTING if_algorithm = 'SHA256' if_key = lv_kd if_data = `us-gov-west-1` IMPORTING ef_hmacxstring = lv_kr ). CATCH cx_abap_message_digest. ENDTRY.
     " HMAC 3: Service
     TRY. cl_abap_hmac=>calculate_hmac_for_char( EXPORTING if_algorithm = 'SHA256' if_key = lv_kr if_data = `sts` IMPORTING ef_hmacxstring = lv_ki ). CATCH cx_abap_message_digest. ENDTRY.
     
@@ -167,7 +167,7 @@ CLASS zcl_auth_wif_aws IMPLEMENTATION.
     " =========================================================================
     " STEP 5: Construct JSON Payload and Return
     " =========================================================================
-    ls_request-url    = `https://sts.amazonaws.com/?Action=GetCallerIdentity&Version=2011-06-15`.
+    ls_request-url    = `https://sts.us-gov-west-1.amazonaws.com/?Action=GetCallerIdentity&Version=2011-06-15`.
     ls_request-method = `POST`.
 
     ls_header-key   = `x-amz-date`.
