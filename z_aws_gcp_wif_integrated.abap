@@ -155,68 +155,6 @@ CLASS lcl_wif_manager IMPLEMENTATION.
   ENDMETHOD.
 
 
-*  METHOD generate_aws_sts_token.
-*    DATA: lv_ts   TYPE timestamp,
-*          lv_date TYPE d,
-*          lv_time TYPE t,
-*          lv_tstr TYPE string.
-*
-*
-*    " FIX: Manual Timestamp formatting (avoids string offsets entirely)
-*    GET TIME STAMP FIELD lv_ts.
-*    CONVERT TIME STAMP lv_ts TIME ZONE 'UTC' INTO DATE lv_date TIME lv_time.
-*
-*    " AWS requires ISO8601 basic format: YYYYMMDDTHHMMSSZ
-*    lv_tstr = |{ lv_date }T{ lv_time }Z|.
-*
-*
-*data(lv_lf) = cl_abap_char_utilities=>newline.
-*    "data(lv_scope) = |{ lv_date }/us-east-1/sts/aws4_request|.
-*     DATA(lv_scope) = |{ lv_date }/us-gov-west-1/sts/aws4_request|.
-*    "data(lv_can_headers) = |host:sts.amazonaws.com\nx-amz-date:{ lv_tstr }\n| &&
-*    DATA(lv_can_headers) = |host:sts.us-gov-west-1.amazonaws.com\nx-amz-date:{ lv_tstr }cl_abap_char_utilities=>newline| &&
-*                           |x-amz-security-token:{ gs_aws_creds-token }\nx-goog-cloud-target-resource:{ iv_resource } { lv_lf }|.
-*
-*
-*    DATA(lv_signed_hdrs) = 'host;x-amz-date;x-amz-security-token;x-goog-cloud-target-resource'.
-*
-*    " Use backticks ` ` for an empty string literal to satisfy strict typing
-*    DATA(lv_can_req) = |POST\n/\nAction=GetCallerIdentity&Version=2011-06-15{ lv_lf }{ lv_can_headers }{ lv_lf }{ lv_signed_hdrs }{ lv_lf }{ hash_sha256( ` ` ) }|.
-*    DATA(lv_sts) = |AWS4-HMAC-SHA256{ lv_lf }{ lv_tstr }{ lv_lf }{ lv_scope }{ lv_lf }{ hash_sha256( lv_can_req ) }|.
-*
-*
-*    DATA(lv_ks) = string_to_xstring( 'AWS4' && gs_aws_creds-secretaccesskey ).
-*    DATA(lv_kd) = hmac_sha256( iv_key = lv_ks iv_data = |{ lv_date }| ).
-*        DATA(lv_kr) = hmac_sha256( iv_key = lv_kd iv_data = 'us-gov-west-1' ).
-*"    "data(lv_kr) = hmac_sha256( iv_key = lv_kd iv_data = 'us-east-1' ).
-*"     DATA(lv_kr) = hmac_sha256( iv_key = lv_kd iv_data = 'us-gov-west-1' ).
-*
-*
-*    DATA(lv_ki) = hmac_sha256( iv_key = lv_kr iv_data = 'sts' ).
-*    DATA(lv_kn) = hmac_sha256( iv_key = lv_ki iv_data = 'aws4_request' ).
-*
-*
-*    DATA(lv_sig) = to_lower( |{ hmac_sha256( iv_key = lv_kn iv_data = lv_sts ) }| ).
-*    DATA(lv_auth) = |AWS4-HMAC-SHA256 Credential={ gs_aws_creds-accesskeyid }/{ lv_scope }, SignedHeaders={ lv_signed_hdrs }, Signature={ lv_sig }|.
-*
-*
-*    "data(lv_json) = |\{"url":"https://sts.amazonaws.com/?Action=GetCallerIdentity&Version=2011-06-15","method":"POST","headers":[| &&
-*      DATA(lv_json) = |\{"url":"https://sts.us-gov-west-1.amazonaws.com/?Action=GetCallerIdentity&Version=2011-06-15","method":"POST","headers":[| &&
-*                    |\{"key":"host","value":"sts.us-gov-west-1.amazonaws.com"\},| &&
-*                    |\{"key":"x-amz-date","value":"{ lv_tstr }"\},| &&
-*                    |\{"key":"x-amz-security-token","value":"{ gs_aws_creds-token }"\},| &&
-*                    |\{"key":"x-goog-cloud-target-resource","value":"{ iv_resource }"\},| &&
-*                    |\{"key":"Authorization","value":"{ lv_auth }"\}]\}|.
-*    rv_json_token = cl_http_utility=>escape_url( lv_json ).
-*
-*
-* "   DATA(lv_json) = |\{"url":"https://sts.us-gov-west-1.amazonaws.com/?Action=GetCallerIdentity&Version=2011-06-15","method":"POST","headers":[| &&
-* "                 |\{"key":"x-amz-date","value":"{ lv_tstr }"\},| &&
-* "                  |\{"key":"x-amz-security-token","value":"{ gs_aws_creds-token }"\},| &&
-* "/                   |\{"key":"x-goog-cloud-target-resource","value":"{ iv_resource }"\},| &&
-* "                   |\{"key":"Authorization","value":"{ lv_auth }"\}]\}|.
-* "   rv_json_token = cl_http_utility=>escape_url( lv_json ).
-*  ENDMETHOD.
 METHOD generate_aws_sts_token.
 
   DATA: lv_ts   TYPE timestamp,
@@ -344,21 +282,6 @@ FIND REGEX '"access_token":\s*"([^"]+)"'
   ENDMETHOD.
 
 
-*  METHOD hash_sha256.
-*    DATA: lv_bin TYPE xstring.
-*    TRY.
-*        cl_abap_message_digest=>calculate_hash_for_char(
-*          EXPORTING
-*            if_algorithm   = 'SHA256'
-*            if_data        = iv_data
-*          IMPORTING
-*            ef_hashxstring = lv_bin
-*        ).
-*        rv_hash = to_lower( |{ lv_bin }| ).
-*      CATCH cx_abap_message_digest.
-*        CLEAR rv_hash.
-*    ENDTRY.
-*  ENDMETHOD.
 METHOD hash_sha256.
     DATA: lv_bin TYPE xstring.
     " FIX: Convert string to UTF-8 binary format before hashing
@@ -394,21 +317,6 @@ METHOD hash_sha256.
     ENDTRY.
   ENDMETHOD.
 
-
-*  METHOD hmac_sha256.
-*    TRY.
-*        cl_abap_hmac=>calculate_hmac_for_char(
-*          EXPORTING
-*            if_algorithm   = 'SHA256'
-*            if_key         = iv_key
-*            if_data        = iv_data
-*          IMPORTING
-*            ef_hmacxstring = rv_hmac
-*        ).
-*      CATCH cx_abap_message_digest.
-*        CLEAR rv_hmac.
-*    ENDTRY.
-*  ENDMETHOD.
 
 
   METHOD string_to_xstring.
