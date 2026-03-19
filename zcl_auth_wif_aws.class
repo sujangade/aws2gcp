@@ -1,0 +1,197 @@
+CLASS zcl_auth_wif_aws DEFINITION
+  PUBLIC
+  INHERITING FROM /goog/cl_auth_wif_base
+  FINAL
+  CREATE PUBLIC .
+
+  PUBLIC SECTION.
+    TYPES:
+      BEGIN OF t_header_field,
+        key   TYPE string,
+        value TYPE string,
+      END OF t_header_field .
+    TYPES:
+      tt_header_field TYPE STANDARD TABLE OF t_header_field WITH DEFAULT KEY .
+    TYPES:
+      BEGIN OF t_token_request,
+        url     TYPE string,
+        method  TYPE string,
+        headers TYPE tt_header_field,
+      END OF t_token_request .
+      
+    TYPES: 
+      BEGIN OF ty_aws_creds,
+        accesskeyid     TYPE string,
+        secretaccesskey TYPE string,
+        token           TYPE string,
+      END OF ty_aws_creds.
+
+  PROTECTED SECTION.
+    METHODS get_ext_idp_token
+      REDEFINITION .
+
+ENDCLASS.
+
+CLASS zcl_auth_wif_aws IMPLEMENTATION.
+
+  METHOD get_ext_idp_token.
+    " Variables for IMDSv2 and Credentials
+    DATA: lo_http       TYPE REF TO if_http_client,
+          lv_imds_token TYPE string,
+          lv_role       TYPE string,
+          ls_creds      TYPE ty_aws_creds.
+
+    " Variables for Time and Formatting
+    DATA: lv_ts   TYPE timestamp,
+          lv_date TYPE d,
+          lv_time TYPE t,
+          lv_tstr TYPE string.
+          
+    " Variables for Hashing and Signatures
+    DATA: lv_hash_xstr    TYPE xstring,
+          lv_hash_empty   TYPE string,
+          lv_hash_can_req TYPE string,
+          lv_key_xstr     TYPE xstring,
+          lv_data_str     TYPE string,
+          lv_kd           TYPE xstring,
+          lv_kr           TYPE xstring,
+          lv_ki           TYPE xstring,
+          lv_kn           TYPE xstring,
+          lv_hmac_xstr    TYPE xstring,
+          lv_sig          TYPE string.
+
+    " Variables for JSON Request Construction
+    DATA: ls_request TYPE t_token_request,
+          ls_header  TYPE t_header_field.
+
+    " =========================================================================
+    " STEP 1: Fetch AWS Credentials Inline (IMDSv2)
+    " =========================================================================
+    " A. Get Token
+    cl_http_client=>create_by_url( EXPORTING url = 'http://169.254.169.254/latest/api/token' IMPORTING client = lo_http ).
+    lo_http->request->set_method( 'PUT' ).
+    lo_http->request->set_header_field( name = 'x-aws-ec2-metadata-token-ttl-seconds' value = '21600' ).
+    lo_http->send( EXCEPTIONS OTHERS = 1 ). 
+    lo_http->receive( EXCEPTIONS OTHERS = 1 ).
+    lv_imds_token = lo_http->response->get_cdata( ). 
+    lo_http->close( ).
+
+    IF lv_imds_token IS INITIAL.
+      RETURN. " Fail gracefully if no token
+    ENDIF.
+
+    " B. Get Role Name
+    cl_http_client=>create_by_url( EXPORTING url = 'http://169.254.169.254/latest/meta-data/iam/security-credentials/' IMPORTING client = lo_http ).
+    lo_http->request->set_header_field( name = 'x-aws-ec2-metadata-token' value = lv_imds_token ).
+    lo_http->send( EXCEPTIONS OTHERS = 1 ). 
+    lo_http->receive( EXCEPTIONS OTHERS = 1 ).
+    lv_role = lo_http->response->get_cdata( ). 
+    lo_http->close( ).
+
+    " C. Get Temporary Credentials
+    cl_http_client=>create_by_url( EXPORTING url = |http://169.254.169.254/latest/meta-data/iam/security-credentials/{ lv_role }| IMPORTING client = lo_http ).
+    lo_http->request->set_header_field( name = 'x-aws-ec2-metadata-token' value = lv_imds_token ).
+    lo_http->send( EXCEPTIONS OTHERS = 1 ). 
+    lo_http->receive( EXCEPTIONS OTHERS = 1 ).
+    /ui2/cl_json=>deserialize( EXPORTING json = lo_http->response->get_cdata( ) CHANGING data = ls_creds ).
+    lo_http->close( ).
+
+    IF ls_creds IS INITIAL OR ls_creds-accesskeyid IS INITIAL.
+      RETURN.
+    ENDIF.
+
+    " =========================================================================
+    " STEP 2: Generate Timestamps and Scopes (7.52 Compliant)
+    " =========================================================================
+    GET TIME STAMP FIELD lv_ts.
+    CONVERT TIME STAMP lv_ts TIME ZONE 'UTC' INTO DATE lv_date TIME lv_time.
+    lv_tstr = |{ lv_date }T{ lv_time }Z|. 
+
+    DATA(lv_resource)    = iv_audience. 
+    DATA(lv_scope)       = |{ lv_date }/us-east-1/sts/aws4_request|.
+    DATA(lv_signed_hdrs) = `host;x-amz-date;x-amz-security-token;x-goog-cloud-target-resource`.
+    DATA(lv_can_headers) = |host:sts.amazonaws.com\nx-amz-date:{ lv_tstr }\n| &&
+                           |x-amz-security-token:{ ls_creds-token }\nx-goog-cloud-target-resource:{ lv_resource }\n|.
+
+    " =========================================================================
+    " STEP 3: Hash the Payload and Canonical Request
+    " =========================================================================
+    " Hash empty string using backticks ` ` for strict string typing
+    TRY.
+        cl_abap_message_digest=>calculate_hash_for_char( EXPORTING if_algorithm = 'SHA256' if_data = ` ` IMPORTING ef_hashxstring = lv_hash_xstr ).
+        lv_hash_empty = to_lower( |{ lv_hash_xstr }| ).
+      CATCH cx_abap_message_digest.
+        CLEAR lv_hash_empty.
+    ENDTRY.
+
+    " Build Canonical Request string
+    DATA(lv_can_req) = |POST\n/\nAction=GetCallerIdentity&Version=2011-06-15\n{ lv_can_headers }\n{ lv_signed_hdrs }\n{ lv_hash_empty }|.
+
+    " Hash the Canonical Request string
+    TRY.
+        cl_abap_message_digest=>calculate_hash_for_char( EXPORTING if_algorithm = 'SHA256' if_data = lv_can_req IMPORTING ef_hashxstring = lv_hash_xstr ).
+        lv_hash_can_req = to_lower( |{ lv_hash_xstr }| ).
+      CATCH cx_abap_message_digest.
+        CLEAR lv_hash_can_req.
+    ENDTRY.
+
+    " String to Sign
+    DATA(lv_sts) = |AWS4-HMAC-SHA256\n{ lv_tstr }\n{ lv_scope }\n{ lv_hash_can_req }|.
+
+    " =========================================================================
+    " STEP 4: Inline HMAC-SHA256 Signing Process
+    " =========================================================================
+    " Convert Secret Key to XSTRING
+    lv_data_str = `AWS4` && ls_creds-secretaccesskey.
+    cl_abap_conv_out_ce=>create( encoding = 'UTF-8' )->convert( EXPORTING data = lv_data_str IMPORTING buffer = lv_key_xstr ).
+
+    " HMAC 1: Date
+    lv_data_str = |{ lv_date }|.
+    TRY. cl_abap_hmac=>calculate_hmac_for_char( EXPORTING if_algorithm = 'SHA256' if_key = lv_key_xstr if_data = lv_data_str IMPORTING ef_hmacxstring = lv_kd ). CATCH cx_abap_message_digest. ENDTRY.
+    
+    " HMAC 2: Region (Using backticks to enforce STRING type)
+    TRY. cl_abap_hmac=>calculate_hmac_for_char( EXPORTING if_algorithm = 'SHA256' if_key = lv_kd if_data = `us-east-1` IMPORTING ef_hmacxstring = lv_kr ). CATCH cx_abap_message_digest. ENDTRY.
+    
+    " HMAC 3: Service
+    TRY. cl_abap_hmac=>calculate_hmac_for_char( EXPORTING if_algorithm = 'SHA256' if_key = lv_kr if_data = `sts` IMPORTING ef_hmacxstring = lv_ki ). CATCH cx_abap_message_digest. ENDTRY.
+    
+    " HMAC 4: Request
+    TRY. cl_abap_hmac=>calculate_hmac_for_char( EXPORTING if_algorithm = 'SHA256' if_key = lv_ki if_data = `aws4_request` IMPORTING ef_hmacxstring = lv_kn ). CATCH cx_abap_message_digest. ENDTRY.
+
+    " HMAC 5: Final Signature
+    TRY. cl_abap_hmac=>calculate_hmac_for_char( EXPORTING if_algorithm = 'SHA256' if_key = lv_kn if_data = lv_sts IMPORTING ef_hmacxstring = lv_hmac_xstr ). CATCH cx_abap_message_digest. ENDTRY.
+    
+    lv_sig = to_lower( |{ lv_hmac_xstr }| ).
+    DATA(lv_auth) = |AWS4-HMAC-SHA256 Credential={ ls_creds-accesskeyid }/{ lv_scope }, SignedHeaders={ lv_signed_hdrs }, Signature={ lv_sig }|.
+
+    " =========================================================================
+    " STEP 5: Construct JSON Payload and Return
+    " =========================================================================
+    ls_request-url    = `https://sts.amazonaws.com/?Action=GetCallerIdentity&Version=2011-06-15`.
+    ls_request-method = `POST`.
+
+    ls_header-key   = `x-amz-date`.
+    ls_header-value = lv_tstr.
+    APPEND ls_header TO ls_request-headers.
+
+    ls_header-key   = `x-amz-security-token`.
+    ls_header-value = ls_creds-token.
+    APPEND ls_header TO ls_request-headers.
+
+    ls_header-key   = `x-goog-cloud-target-resource`.
+    ls_header-value = lv_resource.
+    APPEND ls_header TO ls_request-headers.
+
+    ls_header-key   = `Authorization`.
+    ls_header-value = lv_auth.
+    APPEND ls_header TO ls_request-headers.
+
+    " Serialize to JSON
+    DATA(lv_json) = /ui2/cl_json=>serialize( data = ls_request compress = abap_true ).
+
+    " Escape and set Returning Parameter (rv_ext_idp_token is from the Base Class signature)
+    rv_ext_idp_token = cl_http_utility=>escape_url( lv_json ).
+
+  ENDMETHOD.
+
+ENDCLASS.
